@@ -1,0 +1,17 @@
+{
+  "name": "procedural-jetpack-joyride-lab",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Internal greybox gameplay lab for studying endless-runner / jetpack-flight mechanics",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "verify": "tsc -p tsconfig.verify.json && node scripts/verify.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "vite": "^5.4.8"
+  }
+}

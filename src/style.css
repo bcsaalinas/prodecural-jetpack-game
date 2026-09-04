@@ -1,0 +1,147 @@
+/* neutral debug colors keep state and collider data readable */
+:root {
+  --bg: #14161a;
+  --bg-panel: #1c1f26;
+  --bg-section: #23262f;
+  --line: #343945;
+  --text: #cfd3dc;
+  --text-dim: #8a90a0;
+  --accent: #4cc38a;
+  --warn: #e5c07b;
+  --danger: #e06c75;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 12px/1.45 "SF Mono", "Cascadia Code", Consolas, Menlo, monospace;
+}
+
+#app {
+  display: flex;
+  gap: 10px;
+  padding: 10px;
+  align-items: flex-start;
+}
+
+#stage { flex: 0 0 auto; }
+
+canvas#game {
+  display: block;
+  background: #101216;
+  border: 1px solid var(--line);
+  image-rendering: pixelated;
+  touch-action: none;
+  user-select: none;
+}
+
+#hint {
+  margin-top: 6px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+#panel {
+  flex: 1 1 340px;
+  max-width: 460px;
+  max-height: 96vh;
+  overflow-y: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px;
+}
+
+#panel h1 {
+  font-size: 13px;
+  margin: 4px 2px 8px;
+  color: var(--accent);
+  letter-spacing: 0.5px;
+}
+
+#panel section {
+  background: var(--bg-section);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 6px 8px;
+  margin-bottom: 8px;
+}
+
+#panel section > h2 {
+  font-size: 11px;
+  margin: 0 0 6px;
+  color: var(--warn);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.ctl-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 3px 0;
+}
+
+.ctl-row label {
+  flex: 0 0 150px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ctl-row input[type="range"] { flex: 1 1 auto; min-width: 60px; accent-color: var(--accent); }
+
+.ctl-row .val {
+  flex: 0 0 74px;
+  text-align: right;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.ctl-row .hint { color: var(--text-dim); font-size: 10px; }
+
+.btn-row { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }
+
+button {
+  background: #2b303c;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font: inherit;
+  cursor: pointer;
+}
+button:hover { background: #363c4a; border-color: var(--accent); }
+button.active { background: var(--accent); color: #0c0e11; font-weight: bold; }
+button.danger { border-color: var(--danger); color: var(--danger); }
+
+#panel textarea {
+  width: 100%;
+  min-height: 90px;
+  background: #12141a;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font: 10.5px/1.4 Consolas, Menlo, monospace;
+  padding: 4px;
+  resize: vertical;
+}
+
+#panel input[type="number"] {
+  width: 110px;
+  background: #12141a;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 3px 6px;
+  font: inherit;
+}
+
+.preset-json { color: var(--warn); white-space: pre-wrap; font-size: 10.5px; }
+.status-line { color: var(--text-dim); margin: 2px 0; }
+.status-line b { color: var(--text); }
