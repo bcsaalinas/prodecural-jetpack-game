@@ -10,6 +10,7 @@ The project has four runtime areas.
 |---|---|---|
 | `src/config` | tunable values, presets, small math helpers | no game or browser code |
 | `src/game` | simulation state and gameplay rules | config and other game modules |
+| `src/game/procedural` | encounter genomes, headless simulation, feasibility, agent, fitness, search, scheduling | config and `src/game` |
 | `src/debug` | panel, telemetry, prediction display, canvas drawing | config and game |
 | `src/main.ts` | browser events, fixed step accumulator, render scheduling | config, game, debug |
 
@@ -32,7 +33,13 @@ the lab. The next fixed step reads those new values.
 | how y and vy change | `src/game/Physics.ts` |
 | how floor and ceiling contact works | `src/game/Player.ts` |
 | how world x becomes screen x | `src/game/Camera.ts` |
-| how obstacle order is produced | `src/game/Spawner.ts` and `Random.ts` |
+| how obstacle order is produced | `src/game/Spawner.ts` (weighted draw or encounter scheduler) and `Random.ts` |
+| how an encounter is searched | `src/game/procedural/SearchGenerator.ts` |
+| when a searched encounter is committed | `src/game/procedural/EncounterScheduler.ts` |
+| whether a whole sequence has a safe path | `src/game/procedural/SequenceValidator.ts` |
+| how the simulated player decides | `src/game/procedural/AgentController.ts` (see `AGENT.md`) |
+| what difficulty, rhythm and novelty mean | `src/game/procedural/Fitness.ts`, `Pacing.ts`, `DiversityArchive.ts` |
+| how encounter seeds are derived | `src/game/procedural/RandomStreams.ts` |
 | how difficulty changes with distance | `src/game/Difficulty.ts` |
 | whether one obstacle can be reached | `src/game/Validator.ts` |
 | how future paths are simulated | `src/game/Trajectory.ts` |
@@ -64,11 +71,15 @@ accumulator >= fixedDt ?
                        +-- loop while enough fixed time remains
         |
         v
+Game.backgroundWork(searchFrameBudgetMs)   // encounter search, a few ms, resumable
+        |
+        v
 DebugRenderer.render
 ```
 
 There can be zero, one, or many simulation steps before one render. Gameplay
-still receives the same `fixedDt` every time.
+still receives the same `fixedDt` every time. The search slice uses wall time
+and only decides when a result becomes available, never which result.
 
 ## one simulation step
 
@@ -78,7 +89,9 @@ still receives the same `fixedDt` every time.
 2. `Difficulty` reads traveled distance and returns world speed.
 3. `Player.update` calls `integrateVertical` and resolves corridor contact.
 4. `Camera.x` advances by `worldSpeed * dt`.
-5. `Spawner` adds due obstacles and the oldest passed obstacle is removed.
+5. `Spawner` adds due obstacles and the oldest passed obstacle is removed. In
+   search mode this means committing every finished encounter whose start is
+   inside the spawn horizon, finishing its search synchronously if needed.
 6. `Collision` checks the player against obstacle rectangles.
 7. A hit stores `DeathInfo` and changes the game state to `DEAD`.
 8. `stepCount` advances.
@@ -135,6 +148,17 @@ The validator can mark an obstacle as rejected. It does not delete or replace
 it. Validation can depend on live player state without changing the seeded
 geometry sequence.
 
+Encounter search uses hierarchical seeds instead of one stream:
+`hash(masterSeed, encounterIndex)` for each encounter and
+`hash(encounterSeed, generation, slot)` for each genome. Every search captures
+its inputs (config snapshot, start position, entry states, archive) when it
+starts, evaluates a fixed number of candidates, and breaks ties
+deterministically. The headless simulation starts on a real camera value and
+steps with the live speed rule, so simulated time and camera positions are
+values the live game will produce. Same seed + config + budget therefore
+produce the same encounters whether the search ran in 0.05 ms slices or in
+one synchronous call; the verifier asserts this.
+
 ## shared physics
 
 `integrateVertical` is used by live play and by trajectory simulation. The
@@ -160,8 +184,12 @@ overlay.
 
 `tsconfig.verify.json` emits only `src/config` and `src/game` to
 `dist-verify`. `scripts/verify.mjs` imports that output and checks seeded
-replay, physics, collision, trajectory bounds, spawn order, and validator
-behavior.
+replay, physics, collision, trajectory bounds, spawn order, validator
+behavior, and the encounter search: seed hierarchy, operator bounds,
+headless-vs-live parity, entry states, sequence feasibility (including a
+jointly impossible transition), agent profiles, search determinism, slicing
+independence, search vs random vs weighted at equal budgets, fallback policy,
+live generator switching and the pacing table.
 
 `dist-verify` is generated output. Edit the TypeScript source and run
 `npm run verify` instead of editing generated JavaScript.
@@ -176,6 +204,8 @@ When a gameplay rule changes:
 4. reuse the live integrator for prediction when possible
 5. keep seeded draw order explicit
 6. add or update a headless check
-7. update `MECHANICS.md` when the math changes
+7. update `MECHANICS.md` when the math changes, `AGENT.md` when the agent
+   or evaluators change
+8. keep search inputs captured at search start so time slicing cannot leak in
 
 This list is about keeping the lab readable. It is not a framework layer.

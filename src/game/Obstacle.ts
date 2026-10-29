@@ -4,6 +4,7 @@
  */
 
 import type { AABB } from "./Player.js";
+import type { World } from "./World.js";
 
 export enum ObstacleType {
   GATE = "GATE",
@@ -28,13 +29,29 @@ export interface MovingSpec {
   phase: number;
 }
 
+/** which searched encounter placed this obstacle; null for the weighted spawner */
+export interface EncounterTag {
+  index: number;
+  phase: string;
+  candidateId: string;
+  targetDifficulty: number;
+  fitness: number | null;
+  fallback: string | null;
+}
+
 export class Obstacle {
   /** Set by the validator: false = "potentially impossible from spawn state". */
   possible = true;
   rejectReason = "";
 
+  /** search metadata for the debug view and death report */
+  encounter: EncounterTag | null = null;
+
   /** Reaction window this obstacle gave the player AT SPAWN TIME (seconds). */
   spawnReactionTime = 0;
+
+  /** Extra spacing budget after this obstacle, in seconds at its scheduled speed. */
+  recoveryAfter = 0;
 
   constructor(
     public readonly id: number,
@@ -62,6 +79,34 @@ export class Obstacle {
       }
       return { x: screenX + p.dx, y, w: p.w, h: p.h };
     });
+  }
+
+  /** world space solid parts, read-only; the headless simulation precomputes from these */
+  getParts(): readonly ObstaclePart[] {
+    return this.parts;
+  }
+
+  /**
+   * Player top-y intervals that clear this obstacle: the free space between
+   * solid parts inside the corridor, shrunk by the player height. With `sweep`
+   * a moving part is expanded to its full travel (conservative, for validation);
+   * without it the part is where it is right now (what a player can see).
+   */
+  freeIntervals(cameraX: number, time: number, world: World, playerHeight: number, sweep: boolean): Array<[number, number]> {
+    const amp = this.moving ? Math.abs(this.moving.amplitude) : 0;
+    const rects = (sweep && this.moving
+      ? this.parts.map((p) => ({ y: p.y - amp, h: p.h + 2 * amp }))
+      : this.getRects(cameraX, time).map((r) => ({ y: r.y, h: r.h })))
+      .sort((a, b) => a.y - b.y);
+    const intervals: Array<[number, number]> = [];
+    let cursor = world.ceilingY();
+    for (const r of rects) {
+      if (r.y - cursor >= playerHeight) intervals.push([cursor, r.y - playerHeight]);
+      cursor = Math.max(cursor, r.y + r.h);
+    }
+    const floor = world.floorY();
+    if (floor - cursor >= playerHeight) intervals.push([cursor, floor - playerHeight]);
+    return intervals;
   }
 
   /** Horizontal distance from the player edge to the obstacle front, px. */

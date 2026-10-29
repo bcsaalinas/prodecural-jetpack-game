@@ -30,6 +30,12 @@ const COLORS = {
   textDim: "#8a90a0",
   warn: "#e5c07b",
   danger: "#e06c75",
+  encounter: "#9aa5b8",
+  witness: "#e5c07b",
+  strongPath: "#56b6c2",
+  intermediatePath: "#c678dd",
+  novicePath: "#e0a06c",
+  entry: "#4cc38a",
 };
 
 export interface FrameStats {
@@ -45,6 +51,7 @@ export class DebugRenderer {
     this.drawGrid(ctx);
     this.drawCorridor(ctx);
     this.drawObstacles(ctx);
+    if (this.game.debug.encounters && this.game.spawner.searchMode) this.drawEncounters(ctx);
     this.drawPlayer(ctx);
     if (this.game.debug.trajectory) this.drawTrajectories(ctx);
     if (this.game.debug.vectors) this.drawVectors(ctx);
@@ -156,8 +163,89 @@ export class DebugRenderer {
         extra = `gap ${(obs.gapBottom - obs.gapTop).toFixed(0)}px  ` + extra;
       }
       this.text(ctx, extra, labelX, labelY + 24, COLORS.textDim);
+      let lineY = labelY + 36;
+      if (obs.encounter) {
+        this.text(ctx, `E${obs.encounter.index} ${obs.encounter.phase} · ${obs.encounter.candidateId}`, labelX, lineY, COLORS.encounter);
+        lineY += 12;
+      }
+      if (obs.recoveryAfter > 0) {
+        this.text(ctx, `RECOVERY after: +${obs.recoveryAfter.toFixed(2)}s`, labelX, lineY, COLORS.vel);
+        lineY += 12;
+      }
       if (!obs.possible) {
-        this.text(ctx, `REJECTED: ${obs.rejectReason}`, labelX, labelY + 36, COLORS.danger);
+        this.text(ctx, `REJECTED: ${obs.rejectReason}`, labelX, lineY, COLORS.danger);
+      }
+    }
+  }
+
+  /**
+   * Searched encounters: start/end brackets, the fixed entry states the search
+   * tested, the feasibility witness (dashed) and the three agent profiles'
+   * recorded paths from the middle entry state. Traces are world-space
+   * positions the headless simulation predicted, drawn in screen space.
+   */
+  private drawEncounters(ctx: CanvasRenderingContext2D): void {
+    const g = this.game;
+    const { camera, cfg } = g;
+    for (const rec of g.spawner.scheduler.committed) {
+      const sx0 = rec.startX - camera.x;
+      const sx1 = rec.endX - camera.x;
+      if (sx1 < -60 || sx0 > CANVAS_WIDTH + 60) continue;
+
+      ctx.save();
+      ctx.setLineDash([3, 5]);
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = COLORS.encounter;
+      ctx.beginPath();
+      ctx.moveTo(Math.round(sx0) + 0.5, 0);
+      ctx.lineTo(Math.round(sx0) + 0.5, CANVAS_HEIGHT);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+
+      const fit = rec.fitness ? rec.fitness.fitness.toFixed(2) : "—";
+      const c = rec.metrics?.completion;
+      const completion = c ? `S${c.strong.toFixed(1)} I${c.intermediate.toFixed(1)} N${c.novice.toFixed(1)}` : "";
+      // labels sit just above the floor, clear of the HUD box and the obstacle labels near the ceiling
+      const floorY = g.world.floorY();
+      this.text(ctx, `E${rec.index} ${rec.phase} d${rec.target.difficulty.toFixed(2)} · ${rec.candidateId} fit ${fit} ${completion}${rec.fallback ? " · FALLBACK" : ""}`,
+        sx0 + 4, floorY - 30, COLORS.encounter);
+      this.text(ctx, rec.phrase, sx0 + 4, floorY - 18, COLORS.textDim);
+
+      // entry states sit where the headless simulation placed the player at its first step
+      const entryX = rec.startCameraX + cfg.playerScreenX - camera.x;
+      if (entryX > -40 && entryX < CANVAS_WIDTH + 40) {
+        ctx.strokeStyle = COLORS.entry;
+        ctx.lineWidth = 1;
+        rec.entries.forEach((e, i) => {
+          ctx.strokeRect(entryX + 0.5, e.y + 0.5, cfg.playerWidth, cfg.playerHeight);
+          if (i === 0) this.text(ctx, `${rec.entries.length} entry states`, entryX + cfg.playerWidth + 4, e.y + 10, COLORS.entry);
+        });
+      }
+
+      const toScreen = (frames: Array<{ cameraX: number; y: number }>) =>
+        frames.map((f) => ({ x: f.cameraX + cfg.playerScreenX + cfg.playerWidth / 2 - camera.x, y: f.y + cfg.playerHeight / 2 }));
+      if (rec.validation?.witness) this.polyline(ctx, toScreen(rec.validation.witness), COLORS.witness, [6, 4]);
+      if (rec.rollouts && rec.entries.length) {
+        const middle = rec.entries[Math.floor(rec.entries.length / 2)].label;
+        const styles: Record<string, string> = { strong: COLORS.strongPath, intermediate: COLORS.intermediatePath, novice: COLORS.novicePath };
+        for (const r of rec.rollouts) {
+          if (r.entry !== middle || !r.trace) continue;
+          const pts = toScreen(r.trace);
+          this.polyline(ctx, pts, styles[r.profile], []);
+          const last = pts[pts.length - 1];
+          if (r.hitId !== null && last) {
+            ctx.strokeStyle = styles[r.profile];
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(last.x - 5, last.y - 5); ctx.lineTo(last.x + 5, last.y + 5);
+            ctx.moveTo(last.x + 5, last.y - 5); ctx.lineTo(last.x - 5, last.y + 5);
+            ctx.stroke();
+          }
+        }
+        if (sx0 > -200 && sx0 < CANVAS_WIDTH) {
+          this.text(ctx, "witness ··· · strong — · intermediate — · novice —", sx0 + 4, floorY - 6, COLORS.textDim);
+        }
       }
     }
   }
@@ -307,7 +395,28 @@ export class DebugRenderer {
       ],
     ];
 
-    const boxW = 560;
+    if (g.spawner.searchMode) {
+      const s = g.spawner.scheduler;
+      const a = s.active;
+      const p = a?.progress;
+      lines.push([
+        `search ${a && p ? `E${a.ctx.encounterIndex} gen ${p.generation + 1}/${a.ctx.budget.generations} ${p.evaluated}/${p.total} ${p.elapsedMs.toFixed(0)}ms` : "idle"}`,
+        `ready ${s.ready.length} · searched ${s.stats.searched} · sync ${s.stats.syncFinishes} · fallback ${s.stats.fallbacks} · ${s.strategy}`,
+      ]);
+      const playerWorldX = g.camera.x + cfg.playerScreenX;
+      const current = s.committed.find((r) => playerWorldX >= r.startCameraX + cfg.playerScreenX && playerWorldX < r.endX);
+      if (current) {
+        const f = current.fitness;
+        lines.push([
+          `encounter E${current.index} ${current.phase}`,
+          `target d ${current.target.difficulty.toFixed(2)} · ${current.candidateId} · ${current.phrase}` +
+            (f ? ` · fit ${f.fitness.toFixed(2)} (dm ${f.difficultyMatch.toFixed(2)} rm ${f.rhythmMatch.toFixed(2)} nov ${f.novelty.toFixed(2)} rd ${f.readability.toFixed(2)})` : "") +
+            (current.fallback ? ` · ${current.fallback}` : ""),
+        ]);
+      }
+    }
+
+    const boxW = 700;
     const boxH = lines.length * 15 + 12;
     ctx.fillStyle = COLORS.hudBg;
     ctx.fillRect(6, 6, boxW, boxH);
@@ -324,7 +433,7 @@ export class DebugRenderer {
 
     this.text(
       ctx,
-      "F1 overlay · F2 colliders · F3 vectors · F4 trajectory · F5 telemetry · P pause · . step · R restart",
+      "F1 overlay · F2 colliders · F3 vectors · F4 trajectory · F5 telemetry · F6 encounters · P pause · . step · R restart",
       6,
       CANVAS_HEIGHT - (g.debug.telemetry ? 132 : 0) - 8,
       COLORS.textDim,
@@ -346,24 +455,32 @@ export class DebugRenderer {
         }
       }
 
-      const w = 460;
-      const h = 150;
-      const x = (CANVAS_WIDTH - w) / 2;
-      const y = 150;
-      ctx.fillStyle = "rgba(20, 8, 10, 0.9)";
-      ctx.fillRect(x, y, w, h);
-      ctx.strokeStyle = COLORS.danger;
-      ctx.strokeRect(x, y, w, h);
-
-      this.text(ctx, `DEAD — hit ${d.obstacleType} #${d.obstacleId}`, x + 14, y + 22, COLORS.danger);
       const rows: Array<[string, string]> = [
         ["vy at impact", `${d.playerVy.toFixed(1)} px/s`],
         ["world speed", `${d.worldSpeed.toFixed(0)} px/s`],
         ["distance", `${d.distance.toFixed(0)} px`],
         ["difficulty", d.difficulty.toFixed(3)],
         ["reaction window at spawn", `${d.spawnReactionTime.toFixed(2)} s`],
-        ["restart", "R = same seed · panel = new seed"],
       ];
+      if (d.encounter) {
+        // seed + encounter index + config reproduce this exact encounter; the candidate id names the genome
+        rows.push(["encounter", `E${d.encounter.index} ${d.encounter.phase} · target d ${d.encounter.targetDifficulty.toFixed(2)}`]);
+        rows.push(["candidate", `${d.encounter.candidateId}${d.encounter.fitness !== null ? ` · fit ${d.encounter.fitness.toFixed(3)}` : ""}`]);
+        if (d.encounter.fallback) rows.push(["fallback", d.encounter.fallback]);
+        rows.push(["reproduce", `seed ${g.cfg.seed} · encounter ${d.encounter.index} · same config + budget`]);
+      }
+      rows.push(["restart", "R = same seed · panel = new seed"]);
+
+      const w = 560;
+      const h = 42 + rows.length * 16;
+      const x = (CANVAS_WIDTH - w) / 2;
+      const y = 120;
+      ctx.fillStyle = "rgba(20, 8, 10, 0.9)";
+      ctx.fillRect(x, y, w, h);
+      ctx.strokeStyle = COLORS.danger;
+      ctx.strokeRect(x, y, w, h);
+
+      this.text(ctx, `DEAD — hit ${d.obstacleType} #${d.obstacleId}`, x + 14, y + 22, COLORS.danger);
       rows.forEach(([k, v], i) => {
         this.text(ctx, k, x + 14, y + 42 + i * 16, COLORS.textDim);
         this.text(ctx, v, x + 220, y + 42 + i * 16, COLORS.text);

@@ -1,0 +1,31 @@
+.candidate-lab-open { width: 100%; margin-bottom: 8px; border-color: var(--warn); color: var(--warn); }
+#candidate-lab { width: min(1240px, 96vw); max-width: 96vw; max-height: 94vh; padding: 18px; color: var(--text); background: var(--bg); border: 1px solid var(--line); overflow: auto; }
+#candidate-lab::backdrop { background: rgba(0, 0, 0, 0.75); }
+#candidate-lab header { display: flex; align-items: center; gap: 16px; border-bottom: 1px solid var(--line); padding-bottom: 10px; }
+#candidate-lab h1 { font-size: 16px; margin: 0; letter-spacing: 1px; }
+#candidate-lab header span { color: var(--warn); }
+#candidate-lab header button { margin-left: auto; }
+#candidate-lab h2 { font-size: 12px; color: var(--warn); text-transform: uppercase; }
+#candidate-lab h3 { margin: 0; color: var(--accent); }
+#candidate-lab p { color: var(--text-dim); }
+#candidate-lab p[role="status"] { color: var(--accent); border-block: 1px solid var(--line); padding: 10px 0; }
+#candidate-lab .lab-toolbar { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
+#candidate-lab .lab-toolbar label { display: grid; gap: 4px; }
+#candidate-lab input[type="number"] { width: 110px; color: var(--text); background: #12151a; border: 1px solid var(--line); padding: 5px; font: inherit; }
+#candidate-lab .lab-body { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 18px; }
+#candidate-lab .candidate-list { display: grid; gap: 8px; max-height: calc(94vh - 290px); overflow-y: auto; padding-right: 4px; }
+#candidate-lab .candidate-card { display: grid; width: 100%; gap: 4px; text-align: left; padding: 8px; }
+#candidate-lab .candidate-card.selected { border-color: var(--accent); }
+#candidate-lab .candidate-card span { color: var(--warn); }
+#candidate-lab .candidate-card small { color: var(--text-dim); }
+#candidate-lab canvas { display: block; width: 100%; height: auto; border: 1px solid var(--line); margin: 4px 0; }
+#candidate-lab ol { padding-left: 20px; color: var(--text-dim); }
+#candidate-lab table { border-collapse: collapse; width: 100%; font-size: 11px; }
+#candidate-lab td, #candidate-lab th { border-bottom: 1px solid var(--line); padding: 5px 6px; text-align: left; }
+#candidate-lab th { color: var(--text-dim); font-weight: normal; }
+#candidate-lab input[type="range"] { width: 100%; accent-color: var(--accent); }
+#candidate-lab .lab-inspect > label { display: block; margin: 8px 0; font-size: 11px; }
+#candidate-lab .lab-inspect > p { white-space: pre-wrap; }
+#candidate-lab details { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 8px; }
+#candidate-lab textarea { width: 100%; min-height: 180px; background: #12151a; color: var(--text); font: 11px monospace; border: 1px solid var(--line); }
+@media (max-width: 850px) { #candidate-lab .lab-body { grid-template-columns: 1fr; } #candidate-lab .candidate-list { grid-template-columns: repeat(2, minmax(0, 1fr)); max-height: 240px; } }

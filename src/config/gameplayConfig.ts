@@ -60,6 +60,8 @@ export interface GameplayConfig {
   minSpacing: number;
   /** obstacle spacing at difficulty zero */
   maxSpacing: number;
+  /** extra breathing time after every third obstacle; zero disables local pacing */
+  recoveryTime: number;
   /** gate gap height at difficulty one */
   openingMin: number;
   /** gate gap height at difficulty zero */
@@ -73,6 +75,32 @@ export interface GameplayConfig {
    * minimum warning time used by the validator
    */
   minReactionTime: number;
+
+  // encounter search (agent evaluated procedural generation)
+  /** 0 = weighted baseline spawner, 1 = evolutionary encounter search; restart to apply */
+  encounterMode: number;
+  /** candidates evaluated per generation */
+  searchPopulation: number;
+  /** generations per encounter; population × generations is the fixed evaluation budget */
+  searchGenerations: number;
+  /** feasible elites copied unchanged into the next generation */
+  searchElites: number;
+  /** wall-clock milliseconds of search work allowed per rendered frame; latency only, never the result */
+  searchFrameBudgetMs: number;
+  /** plausible incoming (y, vy) states tested per candidate */
+  entryStateCount: number;
+  /** fraction of entry states that must have a collision-free path */
+  entryCoverage: number;
+  /** seconds each HOLD or RELEASE lasts in the feasibility search; the minimum control duration */
+  feasibilityInterval: number;
+  /** merged (y, vy) states kept per feasibility layer; bounds the work per entry state */
+  feasibilityMaxStates: number;
+  /** minimum seconds between consecutive obstacle fronts inside an encounter */
+  minObstacleGapTime: number;
+  /** minimum vertical clearance of the feasibility witness, px */
+  minClearance: number;
+  /** clearance below this counts as pressure in the rhythm measurements, px */
+  tightClearance: number;
 
   /** seed for obstacle generation */
   seed: number;
@@ -103,12 +131,26 @@ export function defaultConfig(): GameplayConfig {
     spawnAheadDistance: 1300,
     minSpacing: 260,
     maxSpacing: 620,
+    recoveryTime: 0.75,
     openingMin: 150,
     openingMax: 260,
     obstacleWidth: 60,
     movingHazardSpeed: 90,
     movingHazardAmplitude: 90,
     minReactionTime: 0.8,
+
+    encounterMode: 1,
+    searchPopulation: 8,
+    searchGenerations: 3,
+    searchElites: 2,
+    searchFrameBudgetMs: 6,
+    entryStateCount: 5,
+    entryCoverage: 0.8,
+    feasibilityInterval: 0.1,
+    feasibilityMaxStates: 120,
+    minObstacleGapTime: 0.3,
+    minClearance: 10,
+    tightClearance: 24,
 
     seed: 12345,
   };

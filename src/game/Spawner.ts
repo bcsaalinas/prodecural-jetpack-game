@@ -1,33 +1,56 @@
 /**
- * deterministic obstacle generation on a world distance timeline
- * geometry comes from seed and world x, while validation reads live player state
+ * obstacle generation on a world distance timeline
+ *
+ * Two generators share one cursor (`nextSpawnX`) and one obstacle id counter:
+ *   weighted  the v0.1 baseline: each obstacle is an independent seeded draw
+ *   search    the encounter scheduler: 2–4 obstacle encounters chosen by
+ *             agent-evaluated evolutionary search (procedural/)
+ * Geometry comes from the seed and world x; the single-obstacle validator reads
+ * live player state afterwards and only marks, never rewrites.
  */
 
 import type { GameplayConfig } from "../config/gameplayConfig.js";
-import { computeDifficulty, moverSpeedAt, openingAt, spacingAt } from "./Difficulty.js";
+import { computeDifficulty, moverSpeedAt, openingAt, spacingAt, worldSpeedAt } from "./Difficulty.js";
 import { Obstacle, ObstacleType, type ObstaclePart } from "./Obstacle.js";
+import { EncounterScheduler } from "./procedural/EncounterScheduler.js";
 import { SeededRandom } from "./Random.js";
 import { validateObstacle } from "./Validator.js";
 import type { World } from "./World.js";
 
 /** first obstacle world x leaves time to test the controls */
-const FIRST_SPAWN_X = 1000;
+export const FIRST_SPAWN_X = 1000;
 
 export class Spawner {
-  /** next obstacle world x, also shown in debug output */
+  /** next obstacle (or encounter) world x, also shown in debug output */
   nextSpawnX = FIRST_SPAWN_X;
   private nextId = 1;
   private rng = new SeededRandom(1);
   /** recent validator rejections */
   rejectedLog: string[] = [];
+  readonly scheduler: EncounterScheduler;
+  private lastMode = -1;
 
-  constructor(private cfg: GameplayConfig, private world: World) {}
+  constructor(private cfg: GameplayConfig, private world: World) {
+    this.scheduler = new EncounterScheduler(cfg);
+  }
+
+  /** encounterMode is a number so it round-trips through the JSON config */
+  get searchMode(): boolean {
+    return this.cfg.encounterMode >= 1;
+  }
 
   reset(seed: number): void {
     this.rng = new SeededRandom(seed);
     this.nextSpawnX = FIRST_SPAWN_X;
     this.nextId = 1;
     this.rejectedLog = [];
+    this.lastMode = this.cfg.encounterMode;
+    this.scheduler.reset(seed, FIRST_SPAWN_X, 1, this.searchMode);
+  }
+
+  /** search work between frames; wall-clock budget only, never a result change */
+  backgroundWork(maxMs: number): void {
+    if (this.searchMode) this.scheduler.backgroundWork(maxMs);
   }
 
   /** append every obstacle inside the current spawn horizon */
@@ -39,24 +62,49 @@ export class Spawner {
     out: Obstacle[],
   ): void {
     const horizon = cameraX + this.cfg.playerScreenX + this.cfg.spawnAheadDistance;
+
+    if (this.cfg.encounterMode !== this.lastMode) {
+      // live mode switch: the new generator continues from the current cursor
+      this.lastMode = this.cfg.encounterMode;
+      if (this.searchMode) this.scheduler.reset(this.cfg.seed, this.nextSpawnX, this.nextId, true);
+    }
+
+    if (this.searchMode) {
+      for (const obs of this.scheduler.update(horizon, out)) {
+        this.validate(obs, playerY, playerVy, cameraX, worldSpeed);
+        this.nextId = obs.id + 1;
+      }
+      this.nextSpawnX = this.scheduler.nextPlannedStartX();
+      return;
+    }
+
     while (this.nextSpawnX < horizon) {
       const obs = this.generate(this.nextSpawnX);
-
-      const v = validateObstacle(obs, playerY, playerVy, cameraX, worldSpeed, this.cfg, this.world);
-      obs.possible = v.possible;
-      obs.rejectReason = v.reason;
-      obs.spawnReactionTime = v.reactionTime;
-      if (!v.possible) {
-        this.rejectedLog.push(`#${obs.id} ${obs.type} @${obs.worldX.toFixed(0)}px — ${v.reason}`);
-        if (this.rejectedLog.length > 12) this.rejectedLog.shift();
-        console.warn("[spawner:validator]", this.rejectedLog[this.rejectedLog.length - 1]);
-      }
-
+      this.validate(obs, playerY, playerVy, cameraX, worldSpeed);
       out.push(obs);
 
       // draw spacing after geometry so frame batching does not change rng order
       const d = computeDifficulty(this.nextSpawnX - this.cfg.playerScreenX, this.cfg);
-      this.nextSpawnX += Math.max(60, spacingAt(d, this.cfg, this.rng));
+      const baseSpacing = Math.max(60, spacingAt(d, this.cfg, this.rng));
+      // Three challenges, then a breath: local pacing interrupts the steadily
+      // rising global pressure. Convert seconds to distance at the obstacle's
+      // scheduled speed, so the budget stays deterministic across spawn frames.
+      // No extra random draw: recovery is an authored rhythm, not random luck.
+      obs.recoveryAfter = obs.id % 3 === 0 ? Math.max(0, this.cfg.recoveryTime) : 0;
+      this.nextSpawnX += baseSpacing + worldSpeedAt(d, this.cfg) * obs.recoveryAfter;
+    }
+  }
+
+  /** single-obstacle reaction and reachability check; marks the obstacle and logs a rejection */
+  private validate(obs: Obstacle, playerY: number, playerVy: number, cameraX: number, worldSpeed: number): void {
+    const v = validateObstacle(obs, playerY, playerVy, cameraX, worldSpeed, this.cfg, this.world);
+    obs.possible = v.possible;
+    obs.rejectReason = v.reason;
+    obs.spawnReactionTime = v.reactionTime;
+    if (!v.possible) {
+      this.rejectedLog.push(`#${obs.id} ${obs.type} @${obs.worldX.toFixed(0)}px — ${v.reason}`);
+      if (this.rejectedLog.length > 12) this.rejectedLog.shift();
+      console.warn("[spawner:validator]", this.rejectedLog[this.rejectedLog.length - 1]);
     }
   }
 

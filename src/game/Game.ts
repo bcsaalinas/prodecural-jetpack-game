@@ -8,7 +8,7 @@ import { Camera } from "./Camera.js";
 import { findCollision } from "./Collision.js";
 import { computeDifficulty, worldSpeedAt } from "./Difficulty.js";
 import { Input } from "./Input.js";
-import { Obstacle } from "./Obstacle.js";
+import { Obstacle, type EncounterTag } from "./Obstacle.js";
 import { Player } from "./Player.js";
 import { Spawner } from "./Spawner.js";
 import { World } from "./World.js";
@@ -28,15 +28,19 @@ export interface DeathInfo {
   distance: number;
   difficulty: number;
   spawnReactionTime: number;
+  /** search metadata of the obstacle that was hit; null for the weighted spawner */
+  encounter: EncounterTag | null;
 }
 
-/** debug layers controlled by F1 through F5 */
+/** debug layers controlled by F1 through F6 */
 export interface DebugFlags {
   overlay: boolean;
   colliders: boolean;
   vectors: boolean;
   trajectory: boolean;
   telemetry: boolean;
+  /** encounter brackets, entry states, feasibility witness and agent traces */
+  encounters: boolean;
 }
 
 export class Game {
@@ -64,6 +68,7 @@ export class Game {
     vectors: true,
     trajectory: false,
     telemetry: false,
+    encounters: true,
   };
 
   constructor(readonly cfg: GameplayConfig) {
@@ -114,6 +119,11 @@ export class Game {
     if (this.state === GameState.PAUSED) this.simulate(this.cfg.fixedDt);
   }
 
+  /** encounter search between frames; main passes a wall-clock budget, verification passes Infinity */
+  backgroundWork(maxMs: number): void {
+    this.spawner.backgroundWork(maxMs);
+  }
+
   /** normal fixed step entry used by main */
   step(dt: number): void {
     if (this.state !== GameState.RUNNING && this.state !== GameState.READY) return;
@@ -161,6 +171,7 @@ export class Game {
         distance: this.camera.x,
         difficulty: this.difficulty,
         spawnReactionTime: hit.obstacle.spawnReactionTime,
+        encounter: hit.obstacle.encounter,
       };
     }
 

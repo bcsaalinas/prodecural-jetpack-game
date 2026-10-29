@@ -178,11 +178,37 @@ a timer: `nextSpawnX` is a world position; when the camera comes within
 is drawn:
 
 ```
-nextSpawnX += spacingAt(difficulty, rng)    // spacing in PIXELS
+baseSpacing = max(60, spacingAt(difficulty, rng))
+recoveryAfter = obstacleId % 3 == 0 ? max(0, recoveryTime) : 0
+nextSpawnX += baseSpacing + worldSpeedAt(difficulty) * recoveryAfter
 ```
 
 Spacing in pixels (not seconds) is deliberate: density-in-pixels is what the
-player experiences; seconds would couple density to the current speed.
+player experiences. The local recovery budget is deliberately in seconds,
+converted to pixels using the speed scheduled at that obstacle's world position.
+
+### Small pacing experiment: three challenges, then recovery
+
+The GDD's local pacing and `LARGE_SPACING` recovery idea starts here with one
+small rule: every third obstacle gets extra space after it. `recoveryTime`
+defaults to **0.75 s**. At 320 px/s this adds 240 px; at 760 px/s it adds 570 px.
+The player gets a regular opportunity to settle momentum and read the next
+hazard while global difficulty continues to rise.
+
+The debug label `RECOVERY after: +0.75s` records the extra spacing budget.
+This is approximate extra travel time, not total safe time: obstacle width
+uses some of the base interval, and speed can increase while crossing the gap.
+This rule does not guarantee sequence reachability or implement the planned
+grammar/search/agent system; obstacle types still use the baseline seeded draw.
+
+Change **extra recovery time** under Obstacles while playing; it affects newly
+scheduled spacing, leaving already generated world positions intact. Set it to
+**0** and restart with seed **12345** for the previous rhythm, then repeat at
+**0.75**. The first extended interval is between obstacles **#3 and #4**.
+Restart resets the cadence. No additional RNG draws or live player state enter
+the spacing rule, so identical seed/config still reproduce the same geometry
+regardless of how many obstacles are generated in one update. Layouts from older
+versions change when this new setting is enabled.
 
 Obstacle vocabulary (design archetypes, all grey boxes):
 
@@ -198,6 +224,84 @@ Type is a weighted draw (GATE 3 : TOP 2 : BOTTOM 2 : FLOATING 1.5 : MOVING 1);
 gap size, block height, position, phase all come from the seeded stream.
 The generation function consumes random draws in a fixed order per obstacle,
 which keeps the stream aligned run-over-run.
+
+### Development candidate / agent inspector
+
+Run `npm run dev` and open **Candidate lab · DEV** above the developer panel.
+This tool is removed from production by Vite's `import.meta.env.DEV` branch;
+it is loaded lazily and does no generation/testing until opened. Opening it
+pauses an active run. Closing leaves that run paused for an explicit resume.
+
+**Generate candidates** captures the current gameplay configuration and lab
+seed. Six finite encounters appear immediately, before agent testing: three
+authored movement phrases × two spacing/clearance alternatives. Each card shows
+geometry and status; select it to inspect the derivation, world positions,
+safe collider intervals, parameter choices, and construction check.
+Open **Generation steps + concrete parameters** beneath the replay to view
+the expansion trace and geometry table. New live physics edits apply only
+after regeneration. Agent settings apply when a new
+test is started; one-decision stepping continues the existing captured settings.
+
+The first bounded grammar experiment uses:
+
+```
+<Encounter> → <Pattern> <Recovery> <Pattern>
+CLIMB / DIVE → BLOCK_BOTTOM GATE LARGE_SPACING BLOCK_TOP
+DIVE / CLIMB → BLOCK_TOP GATE LARGE_SPACING BLOCK_BOTTOM
+PRECISION / REVERSAL → GATE GATE LARGE_SPACING GATE
+spacing ∈ {maxSpacing × 0.9, maxSpacing × 1.1}
+extra recovery distance = worldStartSpeed × recoveryTime
+clearance ∈ {20, 40}px
+target offset ∈ {-0.05, 0, +0.05} of available vertical travel
+```
+
+Each candidate gets a seed stream derived from master seed and its stable index.
+Targets guide a simple construction controller:
+`HOLD when y + vy × 0.22 > targetY`, otherwise RELEASE. It runs the actual
+`Player.update` integrator and corridor response. For each obstacle, all frames
+where player and obstacle overlap horizontally define an envelope:
+`gapTop = min(playerY) - clearance` and
+`gapBottom = max(playerY + playerHeight) + clearance`, clipped to the corridor.
+The appropriate solids are built outside that envelope. The resulting recorded
+control path is replayed through actual collision detection before marking the
+candidate construction-checked. Empty solids or a colliding witness are rejected
+and remain visible. Thus the opening can widen to fit the construction path;
+`openingMin/Max` are not used in this initial experiment. This proves a path
+for one reset entry state in the discrete simulation, not for arbitrary entries
+or encounter-to-encounter boundaries. The lab rejects horizontal steps large
+enough to skip an entire collider, but still shares the game's discrete AABB
+limitations. Speed stays at the captured `worldStartSpeed`; difficulty is frozen.
+
+**Test all candidates** or **Test selected candidate** runs an independent
+receding-horizon beam-search agent. Each decision observes current position,
+velocity, and solids visible within the game's 960px viewport. It expands HOLD
+and RELEASE actions using the real simulation, removes colliding branches, and
+keeps the lowest-cost beam with stable tie-breaking. The heuristic is squared
+distance from the next visible safe interval center using `y + vy × 0.15`, plus
+a small control-switch cost. It executes only the first action and replans.
+Default budget: beam 8, horizon 8 actions, action interval 0.1s (rounded to fixed
+steps). The agent never receives construction controls or target fractions.
+No visible obstacle means it aims at the corridor center. Failure under this
+bounded planner is a performance result, not proof of impossibility.
+
+The inspector shows completion/progress, collision ID, control switches, vertical
+travel, and minimum vertical clearance while horizontally crossing obstacle
+solids. A timeline shows HOLD in green and RELEASE in gray. **Agent: one
+decision** advances the actual controller; **Replay: one frame** only advances
+through its saved fixed-step frames. Play/pause, scrubbing, and witness visibility
+make it possible to compare construction and agent trajectories. Each replay
+frame includes the decision's visible obstacles, rollout count, collided
+branches, and predicted cost. `PREFIX_ONLY` means the full planning horizon
+had no surviving branch but a shorter prefix did. `NO_SAFE_ACTION` means neither
+first-action branch survived; the controller records RELEASE as its fallback
+and the actual collision ends the test, with no fabricated prediction score.
+**Prepare JSON** exports seed, config, derivation,
+concrete geometry, witness, agent settings, decisions, and replay frames.
+
+This inspector is a development harness for watching one agent decision at a
+time. The runtime generator that actually searches, ranks and schedules
+encounters is described in §18–§27 below; it reuses the same headless
+simulation and the same agent code.
 
 ## 11. Seeded randomness
 
@@ -307,9 +411,19 @@ All in `src/config/gameplayConfig.ts`, all live-editable in the panel.
 | `minSpacing` / `maxSpacing` | 260 / 620 | decision density |
 | `openingMin` / `openingMax` | 150 / 260 | required precision (player is 44 px tall) |
 | `minReactionTime` | 0.8 s | fairness floor enforced by the validator |
+| `encounterMode` | 1 | 0 = weighted v0.1 spawner, 1 = encounter search (§24) |
+| `searchPopulation` × `searchGenerations` | 8 × 3 | fixed evaluation budget per encounter |
+| `searchElites` | 2 | feasible genomes copied unchanged each generation |
+| `entryStateCount` / `entryCoverage` | 5 / 0.8 | incoming states tested, fraction that must have a safe path |
+| `feasibilityInterval` | 0.1 s | control quantum of the feasibility search = minimum control duration |
+| `feasibilityMaxStates` | 120 | merged states kept per layer; bounds feasibility work |
+| `minObstacleGapTime` | 0.3 s | minimum warning between fronts inside an encounter |
+| `minClearance` / `tightClearance` | 10 / 24 px | witness gate / pressure threshold |
+| `searchFrameBudgetMs` | 6 ms | wall time per frame for search; latency only |
 
 Rule of thumb: accelerations and clamps are *physics*; spacing/openings are
-*level design*; damping and start velocity are *feel*.
+*level design*; damping and start velocity are *feel*; the search knobs are
+*budget and fairness policy*.
 
 ## 17. Translating to a real engine
 
@@ -330,6 +444,252 @@ Concept → Godot 4 → Unity mapping. The *equations* transfer; only the plumbi
 The deep lesson: nothing in this lab is browser-specific. Forces →
 acceleration → velocity → position, fixed ticks, seeded generation, and
 distance-based difficulty are engine-independent decisions.
+
+---
+
+## 18. Encounter genomes and legal bounds
+
+`src/game/procedural/EncounterGenome.ts`. The search unit is an **encounter**:
+two to four obstacles that are evaluated and committed together. Its genome is
+a list of genes:
+
+```
+ObstacleGene {
+  type        GATE | BLOCK_TOP | BLOCK_BOTTOM | FLOATING | MOVING
+  demand      CLIMB | DIVE | PRECISION | CHOICE | TIMING | RECOVERY | NEUTRAL   (derived)
+  spacing     px from the previous obstacle front (unused on the first gene)
+  center      corridor fraction 0..1 of the gap or body centre
+  opening     corridor fraction left free (gate gap, or the open side of a block)
+  size        corridor fraction of a floating / moving body
+  moverSpeed, moverAmplitude, moverPhase
+}
+```
+
+Fractions instead of pixels keep a genome meaningful when the corridor or the
+player size change. `legalBounds(cfg, world)` is the search space: spacing
+`[0.6 × minSpacing, 1.5 × maxSpacing]`, openings no smaller than
+`(playerHeight + 2 × minClearance) / corridor`, lengths 2–4, mover periods
+readable. `initRanges` is the narrower difficulty-controlled slice used only for
+initial candidates:
+
+```
+d_eff       = difficulty × phase.budgetScale
+spacingBase = lerp(maxSpacing, minSpacing, d_eff) × phase.spacingScale
+gateBase    = lerp(openingMax, openingMin, d_eff) / corridor × phase.openingScale
+```
+
+Mutation picks one operator per child: `SHIFT_CENTER`, `CHANGE_SPACING`,
+`CHANGE_OPENING`, `CHANGE_SIZE`, `MOVER_TIMING`, `SWITCH_TYPE`, `INSERT`,
+`REMOVE`, `SWAP`. Crossover splices a prefix of one parent with a suffix of
+another. Every result passes `repairGenome`, which clamps each field to the
+legal bounds and recomputes the demand, so an operator can never produce
+illegal geometry; the verifier checks 960 mutations stay inside the bounds.
+
+`realizeGenome` turns genes into `Obstacle` objects with the same part
+conventions as the weighted spawner, so collision and drawing are unchanged.
+
+`cheapConstraints` rejects before any simulation, with a reason: length,
+free space `< playerHeight + 2 × minClearance`, warning time
+`spacing / speed < minObstacleGapTime`, movers in phases that forbid them,
+unreadable mover periods, and a third consecutive PRECISION or TIMING
+encounter.
+
+## 19. Hierarchical deterministic seeds
+
+`src/game/procedural/RandomStreams.ts`. One sequential stream is ideal while
+nothing is ever regenerated. Once a validator can reject and resample, a single
+stream makes every later encounter shift because one encounter consumed extra
+draws. The search therefore derives streams by hashing:
+
+```
+encounterSeed(master, i)        = hash32(hash32(master, tag), i)
+genomeSeed(encounter, gen, slot) = hash32(hash32(encounter, tag + gen), slot)
+```
+
+`hash32` is the murmur3 finaliser over two inputs. Consequences: encounter 20
+never changes because encounter 4 needed a retry; `masterSeed + encounterIndex`
+reproduces one encounter in isolation; a test can target a single broken
+encounter. The agent itself uses no randomness at all.
+
+## 20. Local pacing: WARMUP → BUILD → PEAK → RECOVERY
+
+`src/game/procedural/Pacing.ts`. Global difficulty (§12) stays the budget;
+pacing phases decide how much of it each encounter spends and what the agent
+measurements should look like:
+
+| phase | budget | completion targets S / I / N | switches/s | pressure | moving | gap after |
+|---|---|---|---|---|---|---|
+| WARMUP (encounter 0) | 0.5 | 1.0 / 1.0 / 0.8 | 0.4–2.5 | 0–0.15 | no | 1.2 s |
+| BUILD | 0.85 | 1.0 / 0.8 / 0.6 | 1.2–4.0 | 0.08–0.4 | d > 0.1 | 0.9 s |
+| PEAK | 1.0 | 0.8 / 0.6 / 0.2 | 2.0–6.0 | 0.2–0.7 | d > 0.1 | 0.8 s |
+| RECOVERY | 0.4 | 1.0 / 1.0 / 1.0 | 0–2.0 | 0–0.1 | no | 1.3 s |
+
+`phaseForEncounter(i)`: index 0 is WARMUP, then BUILD, PEAK, RECOVERY repeat.
+These are initial illustrative settings for five entry states; they change only
+after playtests. PEAK's low novice target can never override a feasibility
+gate, because gates run before fitness.
+
+## 21. Whole-sequence feasibility and entry states
+
+`src/game/procedural/SequenceValidator.ts`. The single-obstacle validator (§15)
+remains a cheap prefilter. Velocity carries through a sequence, so two gates
+that are each reachable can be jointly impossible. The sequence check asks:
+*from a plausible incoming state, does any HOLD/RELEASE path survive every
+obstacle plus the exit buffer?*
+
+```
+layer = { entry state }
+repeat until the encounter window ends:
+    for each state, for HOLD and RELEASE:
+        clone, advance `feasibilityInterval` of fixed steps, drop on collision
+        merge states whose (round(y/4), round(vy/20)) bin repeats, keeping the safest
+    cap the layer at feasibilityMaxStates (flagged)
+no survivors → infeasible, with the reason
+else        → rebuild the input sequence of the safest terminal and REPLAY it
+              through the real collision test: the witness
+```
+
+The control interval is also the minimum control duration: a one-frame-perfect
+path cannot pass. Entry states are **five fixed quantiles** of the previous
+encounter's exit set (witness terminals plus completed agent rollouts), sorted
+by projected altitude `y + vy × 0.25` so velocity counts; encounter 0 uses
+centre / high / low / rising / falling. The same set is reused for every
+candidate at that boundary, so no genome can win by a convenient start.
+
+Gates, in order, each recorded with its reason: `CHEAP` (§18), `COVERAGE`
+(fewer than `entryCoverage` of the entries have a path), `CLEARANCE` (the
+safest witness passes closer than `minClearance`). The verifier contains two
+gates 150 px apart at 760 px/s with centres at 20 % and 80 % of the corridor:
+each passes §15 on its own, the pair is rejected as
+`feasible from 0/5 entry states … no collision-free HOLD/RELEASE path`.
+
+## 22. Skill profiles and difficulty measurement
+
+`src/game/procedural/AgentController.ts`, documented in detail in `AGENT.md`.
+Difficulty is inferred from how bounded planners perform, never from geometry.
+One receding-horizon beam-search planner runs with three limits:
+
+| profile | beam | horizon | action | reaction delay |
+|---|---|---|---|---|
+| strong | 8 | 10 × 0.12 s | 0.12 s | 0 |
+| intermediate | 4 | 6 × 0.16 s | 0.16 s | 0.12 s |
+| novice | 2 | 4 × 0.20 s | 0.20 s | 0.25 s |
+
+A delayed profile plans against the obstacles that were visible
+`reactionDelay` seconds ago; its physics still run at full rate. Each profile
+flies every entry state: 3 × 5 = 15 rollouts per candidate. From them
+(`Fitness.measure`):
+
+```
+completion[p] = completed rollouts / entry states           (steps of 0.2)
+switchRate    = HOLD/RELEASE switches per second            (strong, successful)
+pressure      = fraction of crossing steps with clearance < tightClearance
+settle        = 1 - |vy at exit| / maxFallSpeed
+```
+
+## 23. Fitness: difficulty, rhythm, novelty, readability
+
+`src/game/procedural/Fitness.ts`, `DiversityArchive.ts`:
+
+```
+difficultyMatch = 1 - mean_p |completion[p] - target[p, phase]|
+rhythmMatch     = mean(closeness(switchRate), closeness(pressure), closeness(settle))
+novelty         = min over recent encounters of 0.7 × structural + 0.3 × behavioral distance
+readability     = 0.5 × clamp(warningTime / (2 × minObstacleGapTime))
+                + 0.5 × clamp(meanClearance / (4 × minClearance))
+fitness         = 0.45 × difficultyMatch + 0.20 × rhythmMatch + 0.20 × novelty + 0.15 × readability
+```
+
+`closeness` is 1 inside the phase band and falls to 0 one band-width outside.
+Structural distance compares types, lanes (H/M/L), spacing bins and demands
+position by position; behavioral distance compares the strong agent's hold
+fraction and switch rate. Readability is capped so an empty layout cannot keep
+collecting it. All four terms are kept separately in the debug output.
+
+## 24. Bounded evolutionary search
+
+`src/game/procedural/SearchGenerator.ts`:
+
+```
+population[0] = motifs matching the phase (even slots) + random legal genomes (odd slots)
+for generation in 0 .. G-1:
+    for each genome:  cheap gate → feasibility from every entry → 15 rollouts → fitness
+    elites  = best E feasible (distinct geometry), copied unchanged
+    others  = tournament(3) parent → 25 % crossover with a second parent → mutate → repair
+winner = feasible genome with the highest fitness; ties by generation then slot
+if nothing is feasible: the verified safe fallback (two wide centred gates, widest spacing),
+    evaluated through the same gates; if even that fails: an empty gap
+```
+
+Identical genomes (same `genomeKey`) reuse the cached evaluation. The budget is
+fixed (`searchPopulation × searchGenerations`, default 24 evaluations), the
+tie-breaks are deterministic and every stream is derived (§19), so the same
+master seed, config and budget choose the same encounter. The strategy switch
+in the panel replaces evolution with fresh random populations at the same
+budget, which is the comparison the design document asks for (§27).
+
+## 25. Runtime scheduling, determinism and the frame budget
+
+`src/game/procedural/EncounterScheduler.ts`, called from `Spawner` when
+`encounterMode = 1`. The scheduler searches encounters in order (each needs the
+previous exits), keeps up to two finished encounters in a buffer, and commits
+one when its start enters the spawn horizon. The game loop calls
+`game.backgroundWork(searchFrameBudgetMs)` once per rendered frame; the search
+is a generator that yields after every feasibility run and every rollout, so a
+frame spends at most a few milliseconds plus one granule.
+
+The simulation window of encounter *i* starts on a **real camera value**:
+encounter 0 steps the live speed rule from `camera.x = 0` until
+`startX - playerScreenX - 0.6 s × speed`, and each later window starts exactly
+where the previous one ended. Because the headless simulation advances the
+camera with the same rule as `Game.simulate`, every simulated camera value and
+time is one the live game will actually produce, which is why moving hazards
+(absolute time) line up. The verifier reproduces ~240 live steps exactly,
+including a moving-hazard collision.
+
+If the player reaches an encounter whose search is unfinished, the search is
+**completed synchronously** and the hitch is logged (`sync finishes` in the
+HUD). A timing-dependent fallback would make replays differ between machines;
+a hitch does not. The verifier runs the same seed at 0.05 ms per frame and at an
+infinite budget and asserts identical obstacles and death reports.
+
+Measured on this machine: about 20 ms per candidate evaluation (≈170 000
+fixed steps), 300–500 ms per encounter at the default budget, which the
+default 6 ms frame budget delivers in 1–2 s of wall time while an encounter
+takes 2–4 s to play.
+
+## 26. Search inspection in the debug tools
+
+- **F6** draws, per committed encounter: the start bracket with phase, global
+  difficulty, candidate id, fitness and S/I/N completion; the five entry states;
+  the dashed feasibility witness; the strong (cyan), intermediate (purple) and
+  novice (orange) rollouts from the middle entry state, with ✕ at a crash.
+- The HUD shows the active search (encounter, generation, evaluations, elapsed),
+  buffer size, synchronous finishes, fallbacks, and the encounter the player is
+  inside with its fitness breakdown.
+- The panel section **Encounter search** holds the generator and strategy
+  switches, the budget and gate sliders, and the last committed record: targets,
+  winner origin and parents, the fitness equation with its numbers, measured
+  completion / switch / pressure / settle against the bands, coverage, gate
+  counts with example reasons, the winner's mutation history, the near winners
+  and recent rejections, and the scheduler log. "Copy last encounter JSON"
+  exports the whole record including witness and traces.
+- The death report adds encounter index, phase, target, candidate id, fitness,
+  fallback use and the reproduction recipe (seed + encounter index + config +
+  budget).
+
+## 27. Measured comparison: search vs random vs weighted
+
+`npm run verify` prints Experiment B: three seeds × four encounters, evaluated
+with the same feasibility gates, profiles and fitness. Columns: feasible rate
+among evaluated candidates, mean target-difficulty error of the winners, mean
+fitness, novelty, distinct phrases, fallbacks. At the default budget of 24
+evaluations the evolutionary and random strategies land close to each other,
+and both reach a lower target error than the weighted spawner's own
+3-obstacle chunks. Read the table as a measurement, not a verdict: the budget
+is small, the targets are uncalibrated, and the weighted spawner never aims at
+a target at all. Raise `searchGenerations` and rerun to see where evolution
+starts to pull ahead on this machine.
 
 ---
 
@@ -401,6 +761,41 @@ each change so the level is held constant (fair comparison).
     time each decision actually needs; restore 1x and feel where that time
     went.
 
+14. **Search vs random.** In the panel, switch Strategy to RANDOM, restart
+    with seed 12345, and compare the fitness breakdowns of E1–E3 with the
+    EVOLVE run. Then raise generations from 3 to 8 and repeat. The question is
+    at which budget selection beats sampling, not whether it does in principle.
+
+15. **Skill models.** Watch F6 on a PEAK encounter: the novice (orange) path
+    often crashes where the strong (cyan) path threads through. Lower
+    `min gap time` to 0.2 s and observe the novice completion target of 0.2
+    being met by tighter spacing rather than smaller gaps.
+
+16. **Entry coverage.** Set `entry coverage` to 1.0 and `entry states` to 5.
+    COVERAGE rejections rise in the gate counts; the search spends its budget
+    proving every arrival state. Lower coverage to 0.4 and see riskier
+    encounters pass.
+
+17. **Boundary conditions.** Pause (P) inside an encounter and look at the
+    five green entry boxes at its start: they are the quantiles of where the
+    agents left the previous encounter. A high-exit encounter followed by a
+    low gate is where the sequence validator earns its keep.
+
+18. **Budget and hitches.** Set `frame budget` to 0.5 ms and `population` to
+    32. The HUD's `sync` counter climbs when the player outruns the search;
+    the obstacles are still identical to a run at 16 ms (determinism), only the
+    frame time changes.
+
+19. **Fallback.** Raise `min gap time` to 5 s. Every candidate fails the cheap
+    gate, then the fallback fails too, and the scheduler commits empty gaps
+    labelled `EMPTY_GAP`. The run continues. Lower it to 2.6 s with population
+    2 and generations 1 and some seeds commit the verified safe fallback
+    instead.
+
+20. **Weighted baseline.** Switch Generator to WEIGHTED with the same seed and
+    compare the v0.1 sequence with the searched one: same physics, same seed
+    family, different composition rules.
+
 ---
 
 ## Questions this lab is built to answer
@@ -429,3 +824,12 @@ each change so the level is held constant (fair comparison).
   constant (§6–7, Experiment 4).
 - *Why fixed timestep?* Determinism + stability + tunable feel (§7).
 - *Why seeded generation?* Reproducibility for QA, tuning, and tests (§11).
+- *Why can individually fair obstacles form an unfair sequence?* Velocity is
+  state; the reachable band after one obstacle is the entry set of the next
+  (§21).
+- *How is difficulty measured without a human?* Bounded planners with
+  different limits fly every candidate from fixed entry states; their completion
+  rates are compared with phase targets (§22–§23).
+- *Why does search stay deterministic with a frame budget?* The budget only
+  decides when a result arrives; inputs are captured at search start and every
+  stream is derived from the seed (§19, §25).

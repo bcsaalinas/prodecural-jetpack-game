@@ -27,3 +27,11 @@ pnpm-debug.log*
 
 # Vite cache
 .vite/
+
+# Cloudflare local state
+.wrangler/
+.dev.vars
+
+# Local-only AI/agent files
+AGENTS.md
+.claude/

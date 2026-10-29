@@ -23,6 +23,17 @@ const loop: LoopControl = { timeScale: 1 };
 const panelRoot = document.getElementById("panel") as HTMLElement;
 const panel = new DebugPanel(panelRoot, game, loop);
 
+// Vite removes this branch and its dynamic import from production builds.
+// Candidate inspection is deliberately a development-only experiment.
+if (import.meta.env.DEV) {
+  void import("./debug/CandidateLab.js").then(({ mountCandidateLab }) => {
+    mountCandidateLab(cfg, panelRoot, () => {
+      game.input.release();
+      if (game.state === GameState.RUNNING) game.togglePause();
+    });
+  });
+}
+
 // all browser input writes to the same one button state
 
 function isTypingTarget(e: Event): boolean {
@@ -31,6 +42,7 @@ function isTypingTarget(e: Event): boolean {
 }
 
 window.addEventListener("keydown", (e) => {
+  if (import.meta.env.DEV && document.querySelector("#candidate-lab[open]")) return;
   if (isTypingTarget(e)) return;
 
   switch (e.code) {
@@ -68,6 +80,10 @@ window.addEventListener("keydown", (e) => {
     case "F5":
       e.preventDefault(); // F5 belongs to telemetry in this lab
       game.debug.telemetry = !game.debug.telemetry;
+      break;
+    case "F6":
+      e.preventDefault();
+      game.debug.encounters = !game.debug.encounters;
       break;
   }
 });
@@ -112,6 +128,10 @@ function frame(now: number): void {
     steps++;
   }
   if (steps === MAX_STEPS_PER_FRAME) acc = 0;
+
+  // encounter search runs between frames with a wall-clock budget; it changes
+  // when a result is ready, never which encounter is chosen
+  game.backgroundWork(cfg.searchFrameBudgetMs);
 
   renderer.render(ctx, { fps, frameDt });
   requestAnimationFrame(frame);

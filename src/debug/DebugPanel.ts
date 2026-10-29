@@ -70,6 +70,7 @@ const SECTIONS: Array<{ title: string; sliders: SliderDef[] }> = [
       { key: "spawnAheadDistance", label: "spawn ahead dist", min: 500, max: 3000, step: 50, format: f0, hint: "reaction budget" },
       { key: "minSpacing", label: "min spacing", min: 80, max: 1200, step: 10, format: f0, hint: "@ d=1" },
       { key: "maxSpacing", label: "max spacing", min: 80, max: 1600, step: 10, format: f0, hint: "@ d=0" },
+      { key: "recoveryTime", label: "extra recovery time", min: 0, max: 2, step: 0.05, format: f2, hint: "s after every 3rd; new spawns" },
       { key: "openingMin", label: "opening min", min: 60, max: 600, step: 5, format: f0, hint: "gap @ d=1" },
       { key: "openingMax", label: "opening max", min: 60, max: 700, step: 5, format: f0, hint: "gap @ d=0" },
       { key: "obstacleWidth", label: "obstacle width", min: 10, max: 300, step: 5, format: f0 },
@@ -78,6 +79,20 @@ const SECTIONS: Array<{ title: string; sliders: SliderDef[] }> = [
       { key: "minReactionTime", label: "min reaction time", min: 0, max: 3, step: 0.05, format: f2, hint: "validator, s" },
     ],
   },
+];
+
+const SEARCH_SLIDERS: SliderDef[] = [
+  { key: "searchPopulation", label: "population", min: 2, max: 32, step: 1, format: f0, hint: "candidates per generation" },
+  { key: "searchGenerations", label: "generations", min: 1, max: 12, step: 1, format: f0, hint: "× population = evaluation budget" },
+  { key: "searchElites", label: "elites", min: 0, max: 8, step: 1, format: f0, hint: "feasible copies kept" },
+  { key: "searchFrameBudgetMs", label: "frame budget", min: 0.5, max: 16, step: 0.5, format: (v) => `${v.toFixed(1)}ms`, hint: "wall time per frame; latency only" },
+  { key: "entryStateCount", label: "entry states", min: 1, max: 5, step: 1, format: f0, hint: "incoming (y, vy) states tested" },
+  { key: "entryCoverage", label: "entry coverage", min: 0, max: 1, step: 0.1, format: f2, hint: "fraction that needs a safe path" },
+  { key: "feasibilityInterval", label: "control interval", min: 0.05, max: 0.3, step: 0.01, format: f2, hint: "s per HOLD/RELEASE in feasibility" },
+  { key: "feasibilityMaxStates", label: "max states", min: 16, max: 512, step: 8, format: f0, hint: "merged states per layer" },
+  { key: "minObstacleGapTime", label: "min gap time", min: 0.1, max: 1.5, step: 0.05, format: f2, hint: "s between fronts (cheap gate)" },
+  { key: "minClearance", label: "min clearance", min: 0, max: 60, step: 2, format: f0, hint: "px, witness gate" },
+  { key: "tightClearance", label: "tight clearance", min: 4, max: 80, step: 2, format: f0, hint: "px, pressure measurement" },
 ];
 
 /** time scale shared with the loop in main */
@@ -93,6 +108,10 @@ export class DebugPanel {
   private jsonBox!: HTMLTextAreaElement;
   private seedInput!: HTMLInputElement;
   private speedButtons: Array<{ v: number; btn: HTMLButtonElement }> = [];
+  private searchStatusEl!: HTMLDivElement;
+  private searchExportBox!: HTMLTextAreaElement;
+  private modeButton!: HTMLButtonElement;
+  private strategyButton!: HTMLButtonElement;
 
   constructor(
     private root: HTMLElement,
@@ -110,6 +129,7 @@ export class DebugPanel {
 
     this.buildSimSection();
     for (const sec of SECTIONS) this.buildSliderSection(sec.title, sec.sliders);
+    this.buildSearchSection();
     this.buildSeedSection();
     this.buildPresetSection();
     this.buildJsonSection();
@@ -156,8 +176,51 @@ export class DebugPanel {
     s.appendChild(this.statusEl);
   }
 
+  /** encounter search: generator switch, budget sliders, live search inspection, record export */
+  private buildSearchSection(): void {
+    const s = this.section("Encounter search (agent-evaluated evolution)");
+    const g = this.game;
+    const row = this.btnRow(s);
+    this.modeButton = this.btn(row, "", () => {
+      g.cfg.encounterMode = g.cfg.encounterMode >= 1 ? 0 : 1;
+      g.restart(g.cfg.seed);
+      this.refreshInputs();
+    });
+    this.strategyButton = this.btn(row, "", () => {
+      g.spawner.scheduler.strategy = g.spawner.scheduler.strategy === "evolve" ? "random" : "evolve";
+      g.restart(g.cfg.seed);
+      this.refreshInputs();
+    });
+    this.btn(row, "Copy last encounter JSON", () => {
+      const rec = g.spawner.scheduler.committed[g.spawner.scheduler.committed.length - 1] ?? g.spawner.scheduler.ready[0];
+      this.searchExportBox.value = rec ? JSON.stringify({
+        ...rec,
+        obstacles: rec.obstacles.map((o) => ({ id: o.id, type: o.type, worldX: o.worldX, width: o.width, parts: o.getParts(), moving: o.moving })),
+      }, null, 2) : "no encounter yet";
+      this.searchExportBox.select();
+    });
+    const note = document.createElement("div");
+    note.className = "status-line";
+    note.textContent = "Switching generator or strategy restarts with the same seed. Budget sliders apply to the next search. " +
+      "Same seed + config + budget = same encounters; the frame budget only changes when results arrive.";
+    s.appendChild(note);
+    this.addSliders(s, SEARCH_SLIDERS);
+    this.searchStatusEl = document.createElement("div");
+    this.searchStatusEl.className = "status-line";
+    this.searchStatusEl.style.whiteSpace = "pre-wrap";
+    s.appendChild(this.searchStatusEl);
+    this.searchExportBox = document.createElement("textarea");
+    this.searchExportBox.spellcheck = false;
+    this.searchExportBox.readOnly = true;
+    s.appendChild(this.searchExportBox);
+  }
+
   private buildSliderSection(title: string, defs: SliderDef[]): void {
     const s = this.section(title);
+    this.addSliders(s, defs);
+  }
+
+  private addSliders(s: HTMLElement, defs: SliderDef[]): void {
     for (const def of defs) {
       const row = document.createElement("div");
       row.className = "ctl-row";
@@ -285,7 +348,7 @@ export class DebugPanel {
     d.className = "status-line";
     d.innerHTML =
       "<b>Space / click / touch</b> thrust · <b>F1</b> overlay · <b>F2</b> colliders · " +
-      "<b>F3</b> vectors · <b>F4</b> trajectory · <b>F5</b> telemetry · " +
+      "<b>F3</b> vectors · <b>F4</b> trajectory · <b>F5</b> telemetry · <b>F6</b> encounters · " +
       "<b>P</b> pause · <b>.</b> step frame · <b>R</b> restart same seed";
     s.appendChild(d);
   }
@@ -298,7 +361,45 @@ export class DebugPanel {
       ref.val.textContent = this.formatVal(ref.def, v);
     }
     if (this.seedInput) this.seedInput.value = String(this.game.cfg.seed);
+    if (this.modeButton) {
+      this.modeButton.textContent = this.game.cfg.encounterMode >= 1 ? "Generator: SEARCH (encounters)" : "Generator: WEIGHTED (v0.1 baseline)";
+      this.strategyButton.textContent = `Strategy: ${this.game.spawner.scheduler.strategy.toUpperCase()}`;
+    }
     this.markSpeedButtons();
+  }
+
+  /** live search inspection: what is being searched, what was chosen, and why */
+  private searchStatus(): string {
+    const g = this.game;
+    if (!g.spawner.searchMode) return "weighted baseline spawner active: one seeded draw per obstacle, no encounter search";
+    const s = g.spawner.scheduler;
+    const lines: string[] = [];
+    const a = s.active;
+    const p = a?.progress;
+    lines.push(a && p
+      ? `active: E${a.ctx.encounterIndex} ${a.ctx.target.phase} · gen ${p.generation + 1}/${a.ctx.budget.generations} · ${p.evaluated}/${p.total} evals · ${p.elapsedMs.toFixed(0)}ms`
+      : "active: idle (buffer full)");
+    lines.push(`ready ${s.ready.length}/${s.lookahead} · searched ${s.stats.searched} · sync finishes ${s.stats.syncFinishes} · fallbacks ${s.stats.fallbacks} · evals ${s.stats.evaluations} in ${(s.stats.elapsedMs / 1000).toFixed(1)}s`);
+    const rec = s.committed[s.committed.length - 1];
+    if (rec) {
+      const t = rec.target;
+      lines.push(`— last committed E${rec.index} ${rec.phase} · global d ${t.difficulty.toFixed(2)} · budget ×${t.budgetScale} · targets S${t.completion.strong} I${t.completion.intermediate} N${t.completion.novice}`);
+      lines.push(`winner ${rec.candidateId} (${rec.genome.origin}${rec.genome.parentIds.length ? ` of ${rec.genome.parentIds.join(" + ")}` : ""}) · ${rec.phrase}${rec.fallback ? ` · FALLBACK ${rec.fallback}` : ""}`);
+      if (rec.fitness && rec.metrics) {
+        const f = rec.fitness;
+        const m = rec.metrics;
+        lines.push(`fitness ${f.fitness.toFixed(3)} = 0.45×dm ${f.difficultyMatch.toFixed(2)} + 0.20×rhythm ${f.rhythmMatch.toFixed(2)} + 0.20×novelty ${f.novelty.toFixed(2)} + 0.15×read ${f.readability.toFixed(2)}`);
+        lines.push(`completion S${m.completion.strong.toFixed(1)} I${m.completion.intermediate.toFixed(1)} N${m.completion.novice.toFixed(1)} · switch ${m.switchRate.toFixed(1)}/s [${t.switchBand}] · pressure ${m.pressure.toFixed(2)} [${t.pressureBand}] · settle ${m.settle.toFixed(2)} [${t.settleBand}]`);
+        lines.push(`coverage ${(rec.validation?.coverage ?? 0) * rec.entries.length}/${rec.entries.length} entries · witness clearance ${rec.validation?.minClearance?.toFixed(0) ?? "—"}px · warning ${m.warningTime.toFixed(2)}s · ${rec.evaluations} evals (${rec.cachedHits} cached) ${rec.elapsedMs.toFixed(0)}ms${rec.finishedSynchronously ? " SYNC" : ""}`);
+      }
+      lines.push(`gates: ${Object.entries(rec.gateCounts).map(([k, v]) => `${k} ${v}`).join(" · ")}${rec.gateExamples.length ? `\n  e.g. ${rec.gateExamples.slice(0, 2).join("\n  e.g. ")}` : ""}`);
+      lines.push(`history: ${rec.genome.history.slice(-3).join(" ⟶ ")}`);
+      if (rec.nearWinners.length) {
+        lines.push(`near winners: ${rec.nearWinners.map((n) => `${n.id} ${n.fitness ? n.fitness.fitness.toFixed(3) : n.gate} (${n.phrase})`).join(" · ")}`);
+      }
+    }
+    if (s.log.length) lines.push(`log:\n  ${s.log.slice(-4).join("\n  ")}`);
+    return lines.join("\n");
   }
 
   /** refresh status text at the panel update rate */
@@ -308,6 +409,8 @@ export class DebugPanel {
       `state <b>${g.state}</b> · seed <b>${g.cfg.seed}</b> · timeScale <b>${this.loop.timeScale}x</b> · ` +
       `distance <b>${g.camera.x.toFixed(0)}px</b> · difficulty <b>${g.difficulty.toFixed(3)}</b>`;
     this.markSpeedButtons();
+
+    this.searchStatusEl.textContent = this.searchStatus();
 
     const log = g.spawner.rejectedLog;
     this.validatorEl.textContent = log.length
